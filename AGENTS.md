@@ -44,6 +44,8 @@ self-signed cert. CDP `Page.getInstallabilityErrors` must return `[]`.
 
 - Sign-in on an `http://` page silently fails (browser drops the `Secure` cookie, login "just refreshes").
   `Guard` 308-redirects when a trusted proxy reports `X-Forwarded-Proto: http`; app.js also jumps to https.
+- Native `Element.append()` does NOT flatten arrays (an array of links becomes their hrefs as text).
+  Pass arrays through `h()` (which flattens) or spread them: `el.append(...items)`.
 
 ## Don't touch / don't commit
 

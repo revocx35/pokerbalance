@@ -513,10 +513,10 @@ function renderGroupGames(body, g) {
         x.winner ? ` · 🏆 ${x.winner}` : '')),
     h('span', { class: 'chev' }, '›'));
   if (running.length) {
-    body.append(h('div', { class: 'section-title' }, 'Running'), running.map(tile));
+    body.append(h('div', { class: 'section-title' }, 'Running'), ...running.map(tile));
   }
   if (done.length) {
-    body.append(h('div', { class: 'section-title' }, 'Finished'), done.map(tile));
+    body.append(h('div', { class: 'section-title' }, 'Finished'), ...done.map(tile));
   }
 }
 

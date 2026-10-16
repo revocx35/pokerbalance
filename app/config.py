@@ -4,7 +4,7 @@ from __future__ import annotations
 import ipaddress
 import os
 
-__version__ = "1.0.1"
+__version__ = "1.0.2"
 
 
 def _int(name: str, default: int) -> int:

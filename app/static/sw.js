@@ -1,6 +1,6 @@
 'use strict';
 // App-shell cache only. API responses (private data) are never cached.
-const CACHE = 'pokerbalance-v1.0.1';
+const CACHE = 'pokerbalance-v1.0.2';
 const SHELL = [
   '/', '/static/app.js', '/static/style.css', '/manifest.webmanifest',
   '/static/icons/icon.svg', '/static/icons/icon-192.png', '/static/icons/icon-512.png',
