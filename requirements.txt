@@ -1,0 +1,8 @@
+fastapi==0.143.3
+starlette==1.8.0
+pydantic==2.14.1
+uvicorn[standard]==0.54.0
+argon2-cffi==25.1.0
+PyOTP==2.10.0
+segno==1.6.6
+cryptography==50.0.2
