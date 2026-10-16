@@ -210,3 +210,22 @@ def test_proxy_ip_resolution(monkeypatch):
     assert main.client_ip(scope) == "203.0.113.9"  # right-most untrusted, spoofed left entry ignored
     scope = {"client": ("198.51.100.1", 1), "headers": [(b"x-forwarded-for", b"6.6.6.6")]}
     assert main.client_ip(scope) == "198.51.100.1"  # untrusted peer: header ignored
+
+
+def test_http_via_trusted_proxy_redirects_to_https(admin, monkeypatch):
+    import ipaddress
+    from app import main
+    monkeypatch.setattr(config, "TRUSTED_PROXIES", [ipaddress.ip_network("10.0.0.5/32")])
+    plain = {"client": ("10.0.0.5", 1), "headers": [(b"x-forwarded-proto", b"http")]}
+    assert main.proxied_plain_http(plain)
+    assert not main.proxied_plain_http({"client": ("10.0.0.5", 1), "headers": [(b"x-forwarded-proto", b"https")]})
+    assert not main.proxied_plain_http({"client": ("203.0.113.1", 1), "headers": [(b"x-forwarded-proto", b"http")]})
+    # end to end through the middleware (TestClient's peer is "testclient", so trust everything here)
+    monkeypatch.setattr(main, "_trusted", lambda a: True)
+    monkeypatch.setattr(config, "TRUSTED_PROXIES", [ipaddress.ip_network("0.0.0.0/0")])
+    r = admin.c.get("/?a=1", headers={"X-Forwarded-Proto": "http", "Host": "poker.example"}, follow_redirects=False)
+    assert r.status_code == 308 and r.headers["location"] == "https://poker.example/?a=1"
+    r = admin.c.post("/api/groups", json={"name": "G"}, headers={"X-Forwarded-Proto": "http", "X-CSRF-Token": admin.csrf})
+    assert r.status_code == 403
+    r = admin.c.get("/api/state", headers={"X-Forwarded-Proto": "https"})
+    assert r.status_code == 200

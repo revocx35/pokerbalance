@@ -48,6 +48,9 @@ proxy with a real certificate (e.g. Nginx Proxy Manager + Let's Encrypt):
   self-signed certificate, the hop stays encrypted).
 - Set `POKER_TRUSTED_PROXIES=<proxy IP>` in `.env` so login rate limits see the real client IP.
 - Firewall port 8443 so only the proxy can reach it.
+- Turn on **Force SSL** (and HSTS) for the host. The app also redirects `http://` to `https://` itself when the
+  proxy is in `POKER_TRUSTED_PROXIES` and sends `X-Forwarded-Proto` - sign-in can't work on an `http://` page because
+  the session cookie is `Secure`.
 
 Then open the site on the phone and use *Add to Home screen* / *Install app*.
 

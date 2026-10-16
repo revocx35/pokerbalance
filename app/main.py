@@ -34,16 +34,29 @@ SECURITY_HEADERS = [
 ]
 
 
+def _trusted(a: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(a)
+    except ValueError:
+        return False
+    return any(ip in n for n in config.TRUSTED_PROXIES)
+
+
+def proxied_plain_http(scope) -> bool:
+    """True if a trusted reverse proxy says the browser used plain http:// (proxy without "Force SSL")."""
+    peer = (scope.get("client") or ("0.0.0.0", 0))[0]
+    if not config.TRUSTED_PROXIES or not _trusted(peer):
+        return False
+    for k, v in scope.get("headers", []):
+        if k == b"x-forwarded-proto":
+            return v.decode("latin-1").split(",")[0].strip().lower() == "http"
+    return False
+
+
 def client_ip(scope) -> str:
     """The peer address, or the right-most X-Forwarded-For entry not added by a trusted proxy."""
     peer = (scope.get("client") or ("0.0.0.0", 0))[0]
-
-    def trusted(a: str) -> bool:
-        try:
-            ip = ipaddress.ip_address(a)
-        except ValueError:
-            return False
-        return any(ip in n for n in config.TRUSTED_PROXIES)
+    trusted = _trusted
 
     if not config.TRUSTED_PROXIES or not trusted(peer):
         return peer
@@ -97,6 +110,18 @@ class Guard:
         scope.setdefault("state", {})["client_ip"] = ip
         path = scope["path"]
         method = scope["method"]
+        if proxied_plain_http(scope):
+            # Browsers drop the Secure session cookie on http:// pages, so sign-in would silently fail.
+            host = headers.get("host", "")
+            if method not in ("GET", "HEAD") or not re.fullmatch(r"[A-Za-z0-9.\-]+(:\d+)?|\[[0-9A-Fa-f:.]+\](:\d+)?", host):
+                return await self._reject(send, 403, "Use HTTPS.")
+            qs = scope.get("query_string", b"").decode("latin-1")
+            loc = f"https://{host.split(':')[0] if not host.startswith('[') else host.rsplit(':', 1)[0]}{path}" + (f"?{qs}" if qs else "")
+            await send({"type": "http.response.start", "status": 308,
+                        "headers": [(b"location", loc.encode("latin-1")), (b"content-length", b"0"),
+                                    (b"cache-control", b"no-store")] + SECURITY_HEADERS})
+            await send({"type": "http.response.body", "body": b""})
+            return
         if path.startswith("/api/"):
             if not self._rate_ok(ip):
                 return await self._reject(send, 429, "Too many requests, slow down.")

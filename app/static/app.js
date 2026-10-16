@@ -1249,6 +1249,10 @@ async function viewAccount() {
 
 // ------------------------------------------------------------------ start
 
+// Sign-in needs a Secure cookie, which browsers refuse on http:// pages: always move to https.
+if (location.protocol === 'http:' && !/^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname)) {
+  location.replace('https://' + location.hostname + location.pathname + location.search + location.hash);
+}
 window.addEventListener('hashchange', route);
 if ('serviceWorker' in navigator && window.isSecureContext) {
   navigator.serviceWorker.register('/sw.js', { scope: '/' }).catch(() => {});

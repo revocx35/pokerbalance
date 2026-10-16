@@ -42,6 +42,9 @@ self-signed cert. CDP `Page.getInstallabilityErrors` must return `[]`.
 - `games.round_stack` holds the previous payouts for Revert; any change to payouts outside rounding
   must reset it (finish/deal/reopen do).
 
+- Sign-in on an `http://` page silently fails (browser drops the `Secure` cookie, login "just refreshes").
+  `Guard` 308-redirects when a trusted proxy reports `X-Forwarded-Proto: http`; app.js also jumps to https.
+
 ## Don't touch / don't commit
 
 - `data/` (database, setup token, TLS key), `.env`, real hostnames/IPs of the deployment.
