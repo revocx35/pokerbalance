@@ -79,6 +79,25 @@ SCHEMA = [
     );
     CREATE INDEX transfers_game ON transfers(game_id);
     """,
+    # v2: WhatsApp results through a wa_logger API token
+    """
+    CREATE TABLE wa_config (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        base_url TEXT NOT NULL,
+        token_enc BLOB NOT NULL,
+        pin TEXT
+    );
+    ALTER TABLE groups ADD COLUMN wa_mode TEXT NOT NULL DEFAULT 'off';
+    ALTER TABLE groups ADD COLUMN wa_chat_id TEXT;
+    ALTER TABLE groups ADD COLUMN wa_auto INTEGER NOT NULL DEFAULT 1;
+    ALTER TABLE users ADD COLUMN wa_chat_id TEXT;
+    CREATE TABLE wa_sends (
+        game_id INTEGER PRIMARY KEY REFERENCES games(id) ON DELETE CASCADE,
+        at INTEGER NOT NULL,
+        ok INTEGER NOT NULL,
+        detail TEXT NOT NULL
+    );
+    """,
 ]
 
 

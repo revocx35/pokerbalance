@@ -6,13 +6,13 @@ import hmac
 import json
 import re
 import sqlite3
-from typing import Annotated, Iterator
+from typing import Annotated, Iterator, Literal
 
 import segno
 from fastapi import APIRouter, Depends, Request, Response
 from pydantic import BaseModel, Field, field_validator
 
-from . import auth, config, db, games, payouts
+from . import auth, config, db, games, payouts, whatsapp
 from .games import err
 
 router = APIRouter()
@@ -163,6 +163,22 @@ class GroupPatch(Strict):
 
 class MemberIn(Strict):
     user_id: int
+
+
+class WaConfigIn(Strict):
+    base_url: Annotated[str, Field(min_length=1, max_length=200)]
+    token: Annotated[str, Field(max_length=200)] | None = None
+    pin: Annotated[str, Field(max_length=100)] | None = None
+
+
+class WaGroupIn(Strict):
+    mode: Literal["off", "group", "dm"]
+    chat_id: Annotated[str, Field(max_length=200)] | None = None
+    auto: bool = True
+
+
+class WaChatIn(Strict):
+    chat_id: Annotated[str, Field(max_length=200)] | None = None
 
 
 class GameIn(Strict):
@@ -361,7 +377,7 @@ def totp_disable(body: TotpOffIn, request: Request, ctx: User):
 @router.get("/users")
 def list_users(ctx: Admin):
     rows = ctx.conn.execute("SELECT * FROM users ORDER BY display_name COLLATE NOCASE").fetchall()
-    return [user_json(u) for u in rows]
+    return [{**user_json(u), "wa_chat_id": u["wa_chat_id"]} for u in rows]
 
 
 @router.post("/users")
@@ -468,7 +484,7 @@ def get_group(gid: int, ctx: User):
     can_view_group(ctx, gid)
     g = ctx.conn.execute("SELECT * FROM groups WHERE id = ?", (gid,)).fetchone()
     members = ctx.conn.execute(
-        "SELECT u.id, u.display_name, u.username, u.disabled FROM group_members m JOIN users u ON u.id = m.user_id "
+        "SELECT u.id, u.display_name, u.username, u.disabled, u.wa_chat_id FROM group_members m JOIN users u ON u.id = m.user_id "
         "WHERE m.group_id = ? ORDER BY u.display_name COLLATE NOCASE", (gid,)).fetchall()
     game_rows = ctx.conn.execute("SELECT * FROM games WHERE group_id = ? ORDER BY created_at DESC, id DESC",
                                  (gid,)).fetchall()
@@ -484,8 +500,15 @@ def get_group(gid: int, ctx: User):
                           "finish_kind": gm["finish_kind"], "created_at": gm["created_at"],
                           "players": len(ps), "pot": gm["buy_in"] * sum(p["buy_ins"] for p in ps),
                           "winner": winner, "unpaid": unpaid})
-    return {"id": g["id"], "name": g["name"], "currency": g["currency"],
-            "members": [dict(m) for m in members], "games": game_list, **games.group_summary(ctx.conn, gid)}
+    member_list = [dict(m) for m in members]
+    out = {"id": g["id"], "name": g["name"], "currency": g["currency"],
+           "members": member_list, "games": game_list, **games.group_summary(ctx.conn, gid)}
+    if ctx.admin:
+        out["whatsapp"] = {"mode": g["wa_mode"], "chat_id": g["wa_chat_id"], "auto": bool(g["wa_auto"])}
+    else:  # a player's WhatsApp chat is the admin's business
+        for m in member_list:
+            m.pop("wa_chat_id", None)
+    return out
 
 
 @router.patch("/groups/{gid}")
@@ -579,7 +602,12 @@ def _finished(g) -> None:
 
 @router.get("/games/{game_id}")
 def get_game(game_id: int, ctx: User):
-    return games.game_view(ctx.conn, _game_for(ctx, game_id))
+    view = games.game_view(ctx.conn, _game_for(ctx, game_id))
+    if ctx.admin and view["status"] == "finished":
+        mode = ctx.conn.execute("SELECT wa_mode FROM groups WHERE id = ?", (view["group"]["id"],)).fetchone()[0]
+        if mode != "off":
+            view["whatsapp"] = whatsapp.status(ctx.conn, game_id)
+    return view
 
 
 @router.patch("/games/{game_id}")
@@ -657,6 +685,7 @@ def bust(game_id: int, uid: int, ctx: Admin):
     p = _player(ctx.conn, game_id, uid)
     if p["bust_seq"] is not None:
         raise err(409, "That player is already out.")
+    finished = False
     with db.tx(ctx.conn):
         seq = ctx.conn.execute("SELECT COALESCE(MAX(bust_seq), 0) + 1 FROM game_players WHERE game_id = ?",
                                (game_id,)).fetchone()[0]
@@ -666,6 +695,9 @@ def bust(game_id: int, uid: int, ctx: Admin):
                                  (game_id,)).fetchone()[0]
         if alive == 1:
             games.finish_last_standing(ctx.conn, games.get_game(ctx.conn, game_id))
+            finished = True
+    if finished:
+        _auto_whatsapp(ctx.conn, game_id)
     return games.game_view(ctx.conn, games.get_game(ctx.conn, game_id))
 
 
@@ -700,6 +732,7 @@ def deal(game_id: int, body: DealIn, ctx: Admin):
     _running(g)
     with db.tx(ctx.conn):
         games.apply_deal(ctx.conn, g, {int(k): v for k, v in body.shares.items()})
+    _auto_whatsapp(ctx.conn, game_id)
     return games.game_view(ctx.conn, games.get_game(ctx.conn, game_id))
 
 
@@ -730,3 +763,119 @@ def mark_paid(game_id: int, tid: int, body: PaidIn, ctx: Admin):
         if not cur.rowcount:
             raise err(404, "Transfer not found.")
     return games.game_view(ctx.conn, g)
+
+
+# ---------------------------------------------------------------- WhatsApp (results through a wa_logger API token)
+
+
+def _auto_whatsapp(conn: sqlite3.Connection, game_id: int) -> None:
+    """Called right after a game ended: sends in the background when the group asked for it."""
+    row = conn.execute("SELECT gr.wa_mode, gr.wa_auto FROM games g JOIN groups gr ON gr.id = g.group_id "
+                       "WHERE g.id = ?", (game_id,)).fetchone()
+    if row and row["wa_mode"] != "off" and row["wa_auto"] and whatsapp.get_config(conn):
+        whatsapp.dispatch(game_id)
+
+
+def _wa_fail(e: whatsapp.WaError):
+    return err(502, str(e))
+
+
+def _known_chat(conn, chat_id: str, kind: str) -> None:
+    cfg = whatsapp.get_config(conn)
+    if not cfg:
+        raise err(409, "Connect WhatsApp first.")
+    try:
+        found = whatsapp.destinations(cfg)
+    except whatsapp.WaError as e:
+        raise _wa_fail(e)
+    if not any(d["chat_id"] == chat_id and d["kind"] == kind for d in found):
+        raise err(400, "That chat isn't one of the chats this WhatsApp token may use.")
+
+
+@router.get("/whatsapp")
+def wa_status(ctx: Admin):
+    out = whatsapp.public_config(ctx.conn)
+    out["destinations"], out["error"] = None, None
+    cfg = whatsapp.get_config(ctx.conn)
+    if cfg:
+        try:
+            out["destinations"] = whatsapp.destinations(cfg)
+        except whatsapp.WaError as e:
+            out["error"] = str(e)
+    return out
+
+
+@router.put("/whatsapp")
+def wa_connect(body: WaConfigIn, ctx: Admin):
+    try:
+        url = whatsapp.normalize_url(body.base_url)
+        pin = whatsapp.normalize_pin(body.pin)
+        old = whatsapp.get_config(ctx.conn)
+        token = body.token.strip() if body.token and body.token.strip() else None
+        if token is None and not old:
+            raise whatsapp.WaError("Paste the API token from wa_logger.")
+        if token is not None and not re.fullmatch(r"walt_\d{1,5}_[A-Za-z0-9_-]{43}", token):
+            raise whatsapp.WaError("That doesn't look like a wa_logger API token.")
+        trial = {"base_url": url, "pin": pin, "token_enc": whatsapp.seal(token) if token else old["token_enc"]}
+        found = whatsapp.destinations(trial)  # prove the connection works before saving anything
+        whatsapp.save_config(ctx.conn, url, token, pin)
+    except whatsapp.WaError as e:
+        raise _wa_fail(e)
+    return {**whatsapp.public_config(ctx.conn), "destinations": found, "error": None}
+
+
+@router.delete("/whatsapp")
+def wa_disconnect(ctx: Admin):
+    whatsapp.delete_config(ctx.conn)
+    return {"ok": True}
+
+
+@router.post("/whatsapp/test")
+def wa_test(body: WaChatIn, ctx: Admin):
+    cfg = whatsapp.get_config(ctx.conn)
+    if not cfg or not body.chat_id:
+        raise err(409, "Connect WhatsApp and pick a chat first.")
+    try:
+        whatsapp.send_text(cfg, body.chat_id, "✅ Poker Balance is connected. Game results will show up here.")
+    except whatsapp.WaError as e:
+        raise _wa_fail(e)
+    return {"ok": True}
+
+
+@router.put("/groups/{gid}/whatsapp")
+def wa_group(gid: int, body: WaGroupIn, ctx: Admin):
+    can_view_group(ctx, gid)
+    chat = body.chat_id if body.mode == "group" else None
+    if body.mode == "group":
+        if not chat:
+            raise err(400, "Pick the WhatsApp group to post in.")
+        _known_chat(ctx.conn, chat, "group")
+    elif body.mode == "dm" and not whatsapp.get_config(ctx.conn):
+        raise err(409, "Connect WhatsApp first.")
+    with db.tx(ctx.conn):
+        ctx.conn.execute("UPDATE groups SET wa_mode = ?, wa_chat_id = ?, wa_auto = ? WHERE id = ?",
+                         (body.mode, chat, int(body.auto), gid))
+    return {"ok": True}
+
+
+@router.put("/users/{uid}/whatsapp")
+def wa_user(uid: int, body: WaChatIn, ctx: Admin):
+    _get_user(ctx.conn, uid)
+    if body.chat_id:
+        _known_chat(ctx.conn, body.chat_id, "user")
+    with db.tx(ctx.conn):
+        ctx.conn.execute("UPDATE users SET wa_chat_id = ? WHERE id = ?", (body.chat_id or None, uid))
+    return {"ok": True}
+
+
+@router.post("/games/{game_id}/whatsapp")
+def wa_send_game(game_id: int, ctx: Admin):
+    g = _game_for(ctx, game_id)
+    _finished(g)
+    if not whatsapp.get_config(ctx.conn):
+        raise err(409, "Connect WhatsApp first.")
+    if ctx.conn.execute("SELECT wa_mode FROM groups WHERE id = ?", (g["group_id"],)).fetchone()[0] == "off":
+        raise err(409, "WhatsApp messages are off for this group.")
+    if not whatsapp.dispatch(game_id):
+        raise err(409, "This game is already being sent.")
+    return {"ok": True}

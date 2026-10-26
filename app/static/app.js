@@ -615,10 +615,12 @@ function renderMembers(body, g, users) {
 async function groupMenu(g) {
   const choice = await modal(g.name, h('p', { class: 'muted' }, 'Group settings'), [
     { label: 'Edit', value: 'edit' },
+    { label: 'WhatsApp results', value: 'whatsapp' },
     { label: 'Delete group', value: 'delete', cls: 'danger' },
     { label: 'Close', value: null },
   ]);
   if (choice === 'edit') groupDialog(g);
+  if (choice === 'whatsapp') await groupWhatsAppDialog(g).catch(e => toast(e.message, true));
   if (choice === 'delete') {
     if (!await confirmBox('Delete group?', `This deletes “${g.name}” with all ${g.games.length} games and their payments. It can't be undone.`, 'Delete', true)) return;
     await api('DELETE', `/groups/${g.id}`, {}).catch(e => toast(e.message, true));
@@ -1015,6 +1017,19 @@ function renderFinished(main, game, cur, admin) {
   }
   tcard.append(h('div', { class: 'btnrow' }, h('button', { class: 'btn', type: 'button', onclick: act(() => shareResults(game)) }, '↗ Share results')));
   main.append(tcard);
+
+  if (admin && game.whatsapp) {
+    const w = game.whatsapp;
+    const card = h('div', { class: 'card' }, h('h2', null, 'WhatsApp'));
+    if (w.sending) card.append(h('p', { class: 'muted' }, 'Sending…'));
+    else if (w.at) card.append(h('p', { class: w.ok ? '' : 'neg' }, h('span', { class: 'badge ' + (w.ok ? 'green' : 'red') }, w.ok ? 'sent' : 'failed'), ' ', w.detail, ' ', h('span', { class: 'muted small' }, dateStr(w.at))));
+    else card.append(h('p', { class: 'muted small' }, 'Not sent yet.'));
+    card.append(h('div', { class: 'btnrow' }, h('button', {
+      class: 'btn', type: 'button', disabled: w.sending,
+      onclick: act(async () => { await api('POST', `/games/${game.id}/whatsapp`, {}); toast('Sending to WhatsApp…'); rerender(await api('GET', `/games/${game.id}`)); }),
+    }, w.at ? 'Send again' : 'Send to WhatsApp')));
+    main.append(card);
+  }
 }
 
 async function shareResults(game) {
@@ -1143,6 +1158,7 @@ async function viewUsers(seq) {
           u.is_admin ? h('span', { class: 'badge gold' }, 'admin') : null,
           u.totp ? h('span', { class: 'badge green' }, '2FA') : null,
           u.disabled ? h('span', { class: 'badge red' }, 'disabled') : null,
+          u.wa_chat_id ? h('span', { class: 'badge green' }, 'WhatsApp') : null,
           u.must_change_pw ? h('span', { class: 'badge' }, 'temp pw') : null),
         h('div', { class: 'sub' }, '@' + u.username)),
       h('button', { class: 'btn small', type: 'button', onclick: () => userMenu(u) }, 'Manage')));
@@ -1156,6 +1172,7 @@ async function userMenu(u) {
   const isMe = u.id === S.user.id;
   const buttons = [
     { label: 'Rename', value: 'rename' },
+    { label: 'WhatsApp chat', value: 'whatsapp' },
     { label: 'Reset password', value: 'reset' },
     { label: u.is_admin ? 'Remove admin' : 'Make admin', value: 'admin' },
   ];
@@ -1169,6 +1186,9 @@ async function userMenu(u) {
       const res = await modal('Rename', field('Name', name), [{ label: 'Cancel', value: null },
         { label: 'Save', cls: 'primary', onClick: async () => api('PATCH', `/users/${u.id}`, { display_name: name.value }) }]);
       if (!res) return;
+    } else if (choice === 'whatsapp') {
+      await playerWhatsAppDialog(u);
+      return;
     } else if (choice === 'reset') {
       if (!await confirmBox('Reset password?', `${u.display_name} gets a new temporary password and is signed out everywhere.`, 'Reset')) return;
       const res = await api('POST', `/users/${u.id}/reset-password`, {});
@@ -1188,6 +1208,106 @@ async function userMenu(u) {
     toast('Saved');
     route();
   } catch (e) { toast(e.message, true); }
+}
+
+// ------------------------------------------------------------------ WhatsApp
+
+function waSelect(options, current, emptyLabel) {
+  const sel = h('select', { class: 'input' }, h('option', { value: '' }, emptyLabel),
+    options.map(d => h('option', { value: d.chat_id }, d.name)));
+  sel.value = current && options.some(d => d.chat_id === current) ? current : '';
+  return sel;
+}
+
+async function waStatus() {
+  return api('GET', '/whatsapp');
+}
+
+async function groupWhatsAppDialog(g) {
+  const wa = await waStatus();
+  if (!wa.connected) {
+    await modal('WhatsApp', h('p', { class: 'muted' }, 'Connect WhatsApp first: Account → WhatsApp.'), [{ label: 'OK', value: true, cls: 'primary' }]);
+    return;
+  }
+  if (wa.error) { toast(wa.error, true); return; }
+  const cur = g.whatsapp || { mode: 'off', chat_id: null, auto: true };
+  const mode = h('select', { class: 'input' },
+    h('option', { value: 'off' }, 'Off'),
+    h('option', { value: 'group' }, 'Post in a WhatsApp group'),
+    h('option', { value: 'dm' }, 'Message each player privately'));
+  mode.value = cur.mode;
+  const groups = waSelect(wa.destinations.filter(d => d.kind === 'group'), cur.chat_id, 'Choose a group…');
+  const auto = h('input', { type: 'checkbox', checked: cur.auto });
+  const groupField = field('WhatsApp group', groups);
+  const dmNote = h('p', { class: 'muted small' }, 'Each player gets the results and only their own payments. Set a player\'s WhatsApp chat under Players → Manage → WhatsApp chat. Players without one are skipped.');
+  const sync = () => { groupField.classList.toggle('hidden', mode.value !== 'group'); dmNote.classList.toggle('hidden', mode.value !== 'dm'); };
+  mode.addEventListener('change', sync);
+  sync();
+  const body = h('div', null, field('Send results', mode), groupField, dmNote,
+    h('label', { class: 'check' }, auto, 'Send automatically when a game ends'),
+    h('p', { class: 'muted small' }, 'If you round the payouts after a game ends, use “Send to WhatsApp” on the game again to send the final amounts.'));
+  const res = await modal('WhatsApp results', body, [{ label: 'Cancel', value: null },
+    { label: 'Save', cls: 'primary', onClick: async () => api('PUT', `/groups/${g.id}/whatsapp`, { mode: mode.value, chat_id: mode.value === 'group' ? groups.value || null : null, auto: auto.checked }) }]);
+  if (res) { toast('Saved'); route(); }
+}
+
+async function playerWhatsAppDialog(u) {
+  const wa = await waStatus();
+  if (!wa.connected) { toast('Connect WhatsApp first (Account → WhatsApp)', true); return; }
+  if (wa.error) { toast(wa.error, true); return; }
+  const sel = waSelect(wa.destinations.filter(d => d.kind === 'user'), u.wa_chat_id, 'None');
+  const res = await modal(`${u.display_name}: WhatsApp chat`, h('div', null, field('Direct chat', sel),
+    h('p', { class: 'muted small' }, 'Only chats you allowed in wa_logger are listed. Used when a group sends results privately.')), [
+    { label: 'Cancel', value: null },
+    { label: 'Save', cls: 'primary', onClick: async () => api('PUT', `/users/${u.id}/whatsapp`, { chat_id: sel.value || null }) }]);
+  if (res) { toast('Saved'); route(); }
+}
+
+function whatsAppCard(wa) {
+  const card = h('div', { class: 'card' }, h('h2', null, 'WhatsApp'));
+  card.append(h('p', { class: 'muted small' }, 'Post game results and who pays whom through your wa_logger. In wa_logger: Settings → API access → New token, choose the chats Poker Balance may message.'));
+  const url = h('input', { class: 'input', value: wa.base_url || '', placeholder: 'https://wa.example.com', autocomplete: 'off', spellcheck: 'false' });
+  const token = h('input', { class: 'input', type: 'password', autocomplete: 'off', placeholder: wa.connected ? 'Saved. Leave empty to keep it' : 'walt_…' });
+  const pin = h('input', { class: 'input', autocomplete: 'off', spellcheck: 'false', placeholder: 'Only for a self-signed server' });
+  if (wa.connected) {
+    card.append(h('p', null, h('span', { class: 'badge ' + (wa.error ? 'red' : 'green') }, wa.error ? 'problem' : 'connected'), ' ',
+      wa.destinations ? `${wa.destinations.length} chats allowed` : ''));
+    if (wa.error) card.append(h('p', { class: 'neg small' }, wa.error));
+  }
+  card.append(field('wa_logger address', url), field('API token', token),
+    field('Certificate fingerprint (SHA-256)', pin, 'Leave empty if the server has a normal certificate. If it is self-signed, the error shows the fingerprint to paste here.'));
+  const save = h('button', {
+    class: 'btn primary', type: 'button',
+    onclick: act(async () => {
+      await api('PUT', '/whatsapp', { base_url: url.value, token: token.value || null, pin: pin.value || null });
+      toast('Connected');
+      route();
+    }),
+  }, wa.connected ? 'Save' : 'Connect');
+  const row = h('div', { class: 'btnrow' }, save);
+  if (wa.connected) {
+    row.append(h('button', {
+      class: 'btn', type: 'button', disabled: !(wa.destinations && wa.destinations.length),
+      onclick: act(async () => {
+        const sel = waSelect(wa.destinations, null, 'Choose a chat…');
+        const chat = await modal('Send a test message', field('To', sel), [{ label: 'Cancel', value: null },
+          { label: 'Send', cls: 'primary', onClick: async () => { if (!sel.value) throw new Error('Choose a chat'); return sel.value; } }]);
+        if (!chat) return;
+        await api('POST', '/whatsapp/test', { chat_id: chat });
+        toast('Test message sent');
+      }),
+    }, 'Send test'), h('button', {
+      class: 'btn danger', type: 'button',
+      onclick: act(async () => {
+        if (!await confirmBox('Disconnect WhatsApp?', 'The token is forgotten here and every group stops sending. Revoke it in wa_logger as well.', 'Disconnect', true)) return;
+        await api('DELETE', '/whatsapp', {});
+        toast('Disconnected');
+        route();
+      }),
+    }, 'Disconnect'));
+  }
+  card.append(row);
+  return card;
 }
 
 // ------------------------------------------------------------------ account
@@ -1244,6 +1364,11 @@ async function viewAccount() {
           route();
         }),
       }, 'Sign out everywhere'))));
+  if (u.is_admin) {
+    const slot = h('div');
+    main.append(slot);
+    waStatus().then(wa => slot.append(whatsAppCard(wa)), e => slot.append(h('div', { class: 'card' }, h('h2', null, 'WhatsApp'), h('p', { class: 'neg small' }, e.message))));
+  }
   main.append(h('p', { class: 'muted small' }, `Poker Balance ${S.version}`));
 }
 
