@@ -295,6 +295,15 @@ def _results_text(d: dict) -> list[str]:
     return lines
 
 
+def balances_text(group_name: str, currency: str, plan: list[dict]) -> str:
+    """The group's combined unpaid payments (the "Still to pay" card) as one message."""
+    lines = [f"♠️ *{_clean(group_name)} · Still to pay*", ""]
+    if not plan:
+        return "\n".join(lines[:1] + ["Everyone is square. 🎉"])
+    lines += [f"{_clean(t['from_name'])} → {_clean(t['to_name'])}: {_money(t['amount'], currency)}" for t in plan]
+    return "\n".join(lines)
+
+
 def build_messages(conn: sqlite3.Connection, game_id: int) -> tuple[list[tuple[str, str]], list[str]]:
     """([(chat_id, text)], [names that can't be messaged]) for the group's mode."""
     d = _game_data(conn, game_id)

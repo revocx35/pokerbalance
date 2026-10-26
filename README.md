@@ -24,7 +24,7 @@ pay whom with the fewest possible payments. Mobile-first and installable as a PW
   Tick payments off as paid, share the result (WhatsApp etc.) with one tap.
 - **WhatsApp results (optional):** connect a [wa_logger](https://github.com/revocx35/wa_logger) API token under
   Account → WhatsApp. Per group choose *Off*, *Post in a WhatsApp group* or *Message each player privately*
-  (results plus only their own payments), automatically when a game ends and/or with "Send to WhatsApp" on the game.
+  (results plus only their own payments), automatically when a game ends and/or with "Send to WhatsApp" on the game; "Still to pay" on the Balances tab has a "Send to WhatsApp group" button.
 - **Balances:** all-time standings per group and a combined "still to pay" list across all games.
 - **Security:** argon2id passwords, lockout + rate limiting, optional TOTP 2FA, CSRF protection,
   strict CSP, HTTPS by default. See [ARCHITECTURE.md](ARCHITECTURE.md#threat-model).

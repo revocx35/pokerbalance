@@ -24,7 +24,7 @@ self-signed cert. CDP `Page.getInstallabilityErrors` must return `[]`.
 `app/whatsapp.py` talks to a wa_logger instance with a bearer token (`walt_…`, send-only, limited to chats the wa_logger owner picked).
 Tests (`tests/test_whatsapp.py`) run a fake wa_logger over real self-signed TLS and pin its fingerprint. Never log or return the token,
 never allow `http://`, never follow redirects, never contact link-local addresses, never show chat ids to non-admins. The automatic send
-happens right after a game ends, so rounding afterwards needs "Send again" (documented in the UI).
+happens right after a game ends, so rounding afterwards needs "Send again" (documented in the UI). `POST /groups/{gid}/whatsapp/balances` (admin, CSRF) sends the combined "Still to pay" plan to the group chat only.
 
 ## Conventions
 

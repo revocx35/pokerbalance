@@ -868,6 +868,23 @@ def wa_user(uid: int, body: WaChatIn, ctx: Admin):
     return {"ok": True}
 
 
+@router.post("/groups/{gid}/whatsapp/balances")
+def wa_send_balances(gid: int, ctx: Admin):
+    can_view_group(ctx, gid)
+    cfg = whatsapp.get_config(ctx.conn)
+    if not cfg:
+        raise err(409, "Connect WhatsApp first.")
+    g = ctx.conn.execute("SELECT name, currency, wa_mode, wa_chat_id FROM groups WHERE id = ?", (gid,)).fetchone()
+    if g["wa_mode"] != "group" or not g["wa_chat_id"]:
+        raise err(409, "Pick a WhatsApp group under this group's WhatsApp results first.")
+    plan = games.group_summary(ctx.conn, gid)["settle_all"]
+    try:
+        whatsapp.send_text(cfg, g["wa_chat_id"], whatsapp.balances_text(g["name"], g["currency"], plan))
+    except whatsapp.WaError as e:
+        raise _wa_fail(e)
+    return {"ok": True}
+
+
 @router.post("/games/{game_id}/whatsapp")
 def wa_send_game(game_id: int, ctx: Admin):
     g = _game_for(ctx, game_id)

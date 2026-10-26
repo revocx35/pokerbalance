@@ -167,7 +167,8 @@ def test_only_admins_with_csrf_may_touch_whatsapp(admin, wa):
     for method, path, body in [("GET", "/whatsapp", None), ("PUT", "/whatsapp", {"base_url": wa.url}),
                                ("DELETE", "/whatsapp", None), ("POST", "/whatsapp/test", {"chat_id": GROUP_CHAT}),
                                ("PUT", "/users/1/whatsapp", {"chat_id": None}),
-                               ("PUT", "/groups/1/whatsapp", {"mode": "off"}), ("POST", "/games/1/whatsapp", {})]:
+                               ("PUT", "/groups/1/whatsapp", {"mode": "off"}), ("POST", "/games/1/whatsapp", {}),
+                               ("POST", "/groups/1/whatsapp/balances", {})]:
         member.req(method, path, body, expect=403)
     r = admin.c.put("/api/whatsapp", json={"base_url": wa.url})
     assert r.status_code == 403
@@ -276,3 +277,21 @@ def test_link_local_and_unspecified_addresses_are_never_contacted(monkeypatch):
         with pytest.raises(whatsapp.WaError, match="isn't allowed"):
             whatsapp._open(host, 443)
     assert called == []
+
+
+def test_still_to_pay_can_be_sent_to_the_group(admin, wa):
+    connect(admin, wa)
+    gid, ids = group_with_players(admin, 3)
+    play(admin, gid, ids)
+    # Not allowed until a WhatsApp group is picked.
+    admin.req("POST", f"/groups/{gid}/whatsapp/balances", {}, expect=409)
+    admin.put(f"/groups/{gid}/whatsapp", {"mode": "group", "chat_id": GROUP_CHAT, "auto": False})
+    wa.sent.clear()
+    assert admin.post(f"/groups/{gid}/whatsapp/balances", {})["ok"]
+    chat, text = wa.sent[-1]
+    assert chat == GROUP_CHAT
+    assert "Friday · Still to pay" in text and "P0 → P2: ₺100" in text and "P1 → P2: ₺100" in text
+    # Once everything is paid the message says so.
+    admin.post(f"/groups/{gid}/settle-all", {})
+    admin.post(f"/groups/{gid}/whatsapp/balances", {})
+    assert "Everyone is square" in wa.sent[-1][1]

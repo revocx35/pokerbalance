@@ -546,6 +546,15 @@ function renderStandings(body, g) {
       h('div', { class: 'amount num' }, money(t.amount, g.currency))))));
     card.append(h('div', { class: 'muted small' }, owing.map(s => `${s.name} ${signed(s.outstanding, g.currency)}`).join(' · ')));
     if (S.user.is_admin) {
+      if (g.whatsapp && g.whatsapp.mode === 'group') {
+        card.append(h('div', { class: 'btnrow' }, h('button', {
+          class: 'btn', type: 'button',
+          onclick: act(async () => {
+            await api('POST', `/groups/${g.id}/whatsapp/balances`, {});
+            toast('Sent to the WhatsApp group');
+          }),
+        }, 'Send to WhatsApp group')));
+      }
       card.append(h('div', { class: 'btnrow' }, h('button', {
         class: 'btn', type: 'button',
         onclick: act(async () => {

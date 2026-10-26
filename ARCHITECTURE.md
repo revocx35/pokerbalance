@@ -100,7 +100,9 @@ The admin connects a [wa_logger](https://github.com/revocx35/wa_logger) API toke
 list the chats its creator chose and send text to them; it cannot read messages. When a game ends (last player standing or a deal) and
 the group's mode is *group* (one WhatsApp group) or *dm* (each player gets the results and only their own payments), a background
 thread sends the message; the outcome is shown on the game with a "Send again" button (needed after rounding payouts, because the
-automatic message goes out the moment the game ends). DMs are spaced 2–4 s apart.
+automatic message goes out the moment the game ends). DMs are spaced 2–4 s apart. On the Balances tab, when the group's mode is *group*, admins also get "Send to WhatsApp group" on the
+"Still to pay" card (`POST /groups/{gid}/whatsapp/balances`): one synchronous message with the combined unpaid payments
+(`games.group_summary` → `whatsapp.balances_text`), or "Everyone is square".
 
 | Threat | Mitigation |
 | --- | --- |
