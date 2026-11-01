@@ -687,6 +687,11 @@ def bust(game_id: int, uid: int, ctx: Admin):
         raise err(409, "That player is already out.")
     finished = False
     with db.tx(ctx.conn):
+        # Re-check under the write lock: a double tap runs both requests at once, and the second one
+        # would otherwise finish the game again (new transfers, paid flags lost, WhatsApp sent twice).
+        _running(games.get_game(ctx.conn, game_id))
+        if _player(ctx.conn, game_id, uid)["bust_seq"] is not None:
+            raise err(409, "That player is already out.")
         seq = ctx.conn.execute("SELECT COALESCE(MAX(bust_seq), 0) + 1 FROM game_players WHERE game_id = ?",
                                (game_id,)).fetchone()[0]
         ctx.conn.execute("UPDATE game_players SET bust_seq = ? WHERE game_id = ? AND user_id = ?",
@@ -731,6 +736,8 @@ def deal(game_id: int, body: DealIn, ctx: Admin):
     g = _game_for(ctx, game_id)
     _running(g)
     with db.tx(ctx.conn):
+        g = games.get_game(ctx.conn, game_id)  # re-check under the write lock (double tap)
+        _running(g)
         games.apply_deal(ctx.conn, g, {int(k): v for k, v in body.shares.items()})
     _auto_whatsapp(ctx.conn, game_id)
     return games.game_view(ctx.conn, games.get_game(ctx.conn, game_id))
@@ -741,6 +748,8 @@ def round_payouts(game_id: int, body: RoundIn, ctx: Admin):
     g = _game_for(ctx, game_id)
     _finished(g)
     with db.tx(ctx.conn):
+        g = games.get_game(ctx.conn, game_id)  # fresh round_stack under the write lock (double tap)
+        _finished(g)
         games.round_action(ctx.conn, g, body.action)
     return games.game_view(ctx.conn, games.get_game(ctx.conn, game_id))
 
@@ -750,6 +759,7 @@ def reopen(game_id: int, ctx: Admin):
     g = _game_for(ctx, game_id)
     _finished(g)
     with db.tx(ctx.conn):
+        _finished(games.get_game(ctx.conn, game_id))
         games.reopen(ctx.conn, g)
     return games.game_view(ctx.conn, games.get_game(ctx.conn, game_id))
 
