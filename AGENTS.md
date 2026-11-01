@@ -32,6 +32,9 @@ happens right after a game ends, so rounding afterwards needs "Send again" (docu
   The JS `allocate()` in `app.js` mirrors `payouts.allocate` for live previews — keep them in sync.
 - Pure logic lives in `payouts.py` / `settle.py` with no I/O; state changes in `games.py`; HTTP in `api.py`.
 - Every write endpoint: `Admin` dependency, pydantic model with `extra="forbid"` and bounds, `db.tx()`.
+  State checks that guard a write (game running/finished, player busted) must be repeated *inside* `db.tx()`
+  on a freshly read row: sync endpoints run in a thread pool, so a double tap runs two requests at once
+  (`tests/test_races.py`).
 - Error messages are user-facing sentences (the UI shows `detail` verbatim).
 - UI: no inline JS, no inline `style=` attributes, no `innerHTML` with data — build DOM with `h()`.
   The CSP will break anything else.
